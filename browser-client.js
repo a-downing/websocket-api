@@ -1,4 +1,3 @@
-// test1234
 export default class WebSocketApiClient {
     constructor() {
         this.requests = new Map()
