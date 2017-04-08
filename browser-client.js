@@ -10,15 +10,18 @@ export default class WebSocketApiClient {
     }
 
     onError(event) {
+        console.error(event)
+        
         try {
             this._execEventCallbacks('error', event)
         } catch(err) {
-
+            // a callback is the source of the error, don't call it again
+            console.error(err)
         }
     }
 
     on(event, callback) {
-        let sym = Symbol()
+        let sym = Symbol('event callback symbol')
 
         if(!this.eventCallbacks.has(event)) {
             this.eventCallbacks.set(event, new Map())
@@ -35,10 +38,10 @@ export default class WebSocketApiClient {
         this.eventCallbacks.get(event).delete(sym)
     }
 
-    _execEventCallbacks(event, arg = null) {
+    _execEventCallbacks(event, ...args) {
         if(this.eventCallbacks.has(event)) {
-            for(let [sym, callback] of this.eventCallbacks.get(event)) {
-                callback(arg, this, sym)
+            for(let [sym, _cb] of this.eventCallbacks.get(event)) {
+                _cb(...args)
             }
         }
     }
@@ -117,7 +120,6 @@ export default class WebSocketApiClient {
                 }
 
                 this.onMessage(msg)
-                this._execEventCallbacks('message', message)
             } catch(err) {
                 this.onError(err)
             }
@@ -157,17 +159,11 @@ export default class WebSocketApiClient {
 
             let requestId = this._getFreeRequestId()
 
-            let message = JSON.stringify({
+            let message = {
                 type: 'request',
                 name: name,
                 id: requestId,
                 data: data
-            })
-
-            try {
-                this._execEventCallbacks('send', message)
-            } catch(err) {
-                this.onError(err)
             }
 
             this.requests.set(requestId, {
@@ -180,7 +176,13 @@ export default class WebSocketApiClient {
                     throw new Error('WebSocket Not connected (this.connection.readyState != 1)')
                 }
 
-                this.connection.send(message)
+                try {
+                    this._execEventCallbacks('send', message)
+                } catch(err) {
+                    this.onError(err)
+                }
+
+                this.connection.send(JSON.stringify(message))
             } catch(err) {
                 this.requests.delete(requestId)
                 reject(err)
@@ -194,20 +196,25 @@ export default class WebSocketApiClient {
                 throw new Error('WebSocket Not connected (this.connected == false)')
             }
 
-            let message = JSON.stringify({
+            let message = {
                 type: 'response',
                 name: name,
                 id: id,
                 status: status,
                 data: data
-            })
+            }
 
             if(this.connection.readyState != 1) {
                 throw new Error('WebSocket Not connected (this.connection.readyState != 1)')
             }
 
-            this.connection.send(message)
-            this._execEventCallbacks('send', message)
+            try {
+                this._execEventCallbacks('send', message)
+            } catch(err) {
+                this.onError(err)
+            }
+
+            this.connection.send(JSON.stringify(message))
         } catch(err) {
             this.onError(err)
         }
@@ -218,6 +225,12 @@ export default class WebSocketApiClient {
     }
 
     onMessage(msg) {
+        try {
+            this._execEventCallbacks('open', msg)
+        } catch(err) {
+            this.onError(err)
+        }
+
         if(msg.type == 'response') {
             if(!this.requests.has(msg.id)) {
                 this.onError(new Error('matching request id does not exist'))
