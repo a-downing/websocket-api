@@ -148,7 +148,7 @@ export class WebSocketApiServerConnection {
 
     onClose() {
         for(let request of this.requests.values()) {
-            request.reject(new Error('WebSocket closed'))
+            request.reject(new Error('Websocket closed'))
         }
 
         this.getServer().onWebSocketClose(this)
@@ -164,7 +164,7 @@ export class WebSocketApiServerConnection {
     }
 
     onMessage(msg) {
-        this.getServer().onMessage(this, msg)
+        this.getServer().onWebSocketMessage(this, msg)
 
         if(msg.type == 'response') {
             if(!this.requests.has(msg.id)) {
