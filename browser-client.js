@@ -226,7 +226,7 @@ export default class WebSocketApiClient {
 
     onMessage(msg) {
         try {
-            this._execEventCallbacks('open', msg)
+            this._execEventCallbacks('message', msg)
         } catch(err) {
             this.onError(err)
         }
