@@ -21,8 +21,6 @@ export class WebSocketApiServerConnection {
         })
 
         this.connection.on('message', (message) => {
-            console.log(message.substring(0, 256))
-
             try {
                 let msg = JSON.parse(message)
 
@@ -50,15 +48,15 @@ export class WebSocketApiServerConnection {
                     }
                 }
 
-                /*if(!_.has(msg, 'data')) {
-                    throw new Error('missing message data')
-                }*/
-
                 this.onMessage(msg)
             } catch(err) {
                 this.onError(err)
             }
         })
+    }
+
+    getSession() {
+        return this.sess
     }
 
     getServer() {
@@ -91,28 +89,53 @@ export class WebSocketApiServerConnection {
         return new Promise((resolve, reject) => {
             let requestId = this._getFreeRequestId()
 
-            this.connection.send(JSON.stringify({
+            let msg = {
                 type: 'request',
                 name: name,
                 id: requestId,
                 data: data
-            }))
+            }
 
             this.requests.set(requestId, {
                 resolve: resolve,
                 reject: reject
             })
+
+            try {
+                this.onSend(msg)
+            } catch(err) {
+                this.onError(err)
+            }
+
+            try {
+                this.connection.send(JSON.stringify(msg))
+            } catch(err) {
+                this.requests.delete(requestId)
+                reject(err)
+            }
         })
     }
 
     _sendResponse(name, id, status, data) {
-        this.connection.send(JSON.stringify({
-            type: 'response',
-            name: name,
-            id: id,
-            status: status,
-            data: data
-        }))
+        try {
+            let msg = {
+                type: 'response',
+                name: name,
+                id: id,
+                status: status,
+                data: data
+            }
+
+            try {
+                this.onSend(msg)
+            } catch(err) {
+                this.onError(err)
+            }
+
+            this.connection.send(JSON.stringify(msg))
+        } catch(err) {
+            this.onError(err)
+        }
     }
 
     registerRequestMethod(name, method) {
@@ -123,24 +146,26 @@ export class WebSocketApiServerConnection {
         return this.clientId
     }
 
-    onOpen() {
-
-    }
-
     onClose() {
         for(let request of this.requests.values()) {
-            request.reject(new Error('WebSocket closed'))
+            request.reject(new Error('Websocket closed'))
         }
 
-        this.webSocketApiServer.onWebSocketClose(this)
+        this.getServer().onWebSocketClose(this)
     }
 
     onError(err) {
-        console.log('WebSocketApiServerConnection.onError ' + err)
-        this.webSocketApiServer.onWebSocketError(this, err)
+        console.error(err)
+        this.getServer().onWebSocketError(this, err)
+    }
+
+    onSend(msg) {
+        this.getServer().onWebSocketSend(this, msg)
     }
 
     onMessage(msg) {
+        this.getServer().onWebSocketMessage(this, msg)
+
         if(msg.type == 'response') {
             if(!this.requests.has(msg.id)) {
                 this.onError(new Error('matching request id does not exist'))
@@ -184,7 +209,6 @@ export class WebSocketApiServer {
             let clientId = this.getFreeConnectionId()
             let webSocketConnection = new WebSocketApiServerConnection(this, clientId, connection)
             this.clients.set(clientId, webSocketConnection)
-            this.onWebSocketConnection(webSocketConnection)
 
             try {
                 this._execEventCallbacks('open', webSocketConnection)
@@ -192,18 +216,25 @@ export class WebSocketApiServer {
                 this.onError(err)
             }
         })
+
+        this.webSocketServer.on('error', (err) => {
+            this.onError(err)
+        })
     }
 
-    onError(event) {
+    onError(err) {
+        console.error(err)
+        
         try {
-            this._execEventCallbacks('error', event)
+            this._execEventCallbacks('error', err)
         } catch(err) {
-
+            // a callback is the source of the error, don't call it again
+            console.error(err)
         }
     }
 
     on(event, callback) {
-        let sym = Symbol()
+        let sym = Symbol('event callback symbol')
 
         if(!this.eventCallbacks.has(event)) {
             this.eventCallbacks.set(event, new Map())
@@ -220,10 +251,10 @@ export class WebSocketApiServer {
         this.eventCallbacks.get(event).delete(sym)
     }
 
-    _execEventCallbacks(event, arg = null) {
+    _execEventCallbacks(event, ...args) {
         if(this.eventCallbacks.has(event)) {
-            for(let [sym, callback] of this.eventCallbacks.get(event)) {
-                callback(arg, this, sym)
+            for(let [sym, _cb] of this.eventCallbacks.get(event)) {
+                _cb(...args)
             }
         }
     }
@@ -270,22 +301,43 @@ export class WebSocketApiServer {
         return clientId
     }
 
-    freeConnection(webSocketConnection) {
-        let id = webSocketConnection.getConnectionId()
+    freeConnection(con) {
+        let id = con.getConnectionId()
         this.clients.delete(id)
         this.freeClientIds.add(id)
     }
 
-    onWebSocketConnection(webSocketConnection) {
-        webSocketConnection.onOpen()
+    onWebSocketMessage(con, message) {
+        try {
+            this._execEventCallbacks('message', con, message)
+        } catch(err) {
+            this.onError(err)
+        }
     }
 
-    onWebSocketClose(webSocketConnection) {
-        this.freeConnection(webSocketConnection)
+    onWebSocketSend(con, message) {
+        try {
+            this._execEventCallbacks('send', con, message)
+        } catch(err) {
+            this.onError(err)
+        }
     }
 
-    onWebSocketError(webSocketConnection, err) {
-        console.log('WebSocketApiServer.onWebSocketError ' + webSocketConnection.getConnectionId())
-        webSocketConnection.close()
+    onWebSocketClose(con) {
+        try {
+            this._execEventCallbacks('close', con)
+        } catch(err) {
+            this.onError(err)
+        }
+
+        this.freeConnection(con)
+    }
+
+    onWebSocketError(con, err) {
+        try {
+            this._execEventCallbacks('connectionError', con, err)
+        } catch(err) {
+            this.onError(err)
+        }
     }
 }
